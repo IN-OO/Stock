@@ -59,6 +59,9 @@
   }
 
   * { box-sizing: border-box; }
+  /* Elements below set their own `display`, which would otherwise silently
+     override the `hidden` attribute — this keeps `hidden` always working. */
+  [hidden] { display: none !important; }
   html, body {
     height: 100%;
   }
@@ -399,10 +402,9 @@
         <input type="text" id="searchInput" placeholder="Search items, categories, locations…" autocomplete="off">
       </div>
       <select class="filter" id="categoryFilter"><option value="">All categories</option></select>
-      <select class="filter" id="locationFilter"><option value="">All locations</option></select>
     </div>
     <div class="meta-line" id="invCount"></div>
-    <ul class="list" id="inventoryList"></ul>
+    <div id="inventoryList"></div>
     <div class="empty-state" id="inventoryEmpty" hidden>
       <strong>No items yet</strong>
       Tap the + button to add your first item.
@@ -591,13 +593,14 @@ import {
   var currentTab = "inventory";
   var editingItemId = null;
   var qtyBusy = {};
+  var openLocationGroups = {};
   var seededCategoriesOnce = false;
   var seededLocationsOnce = false;
   var seededUnitsOnce = false;
   var deleteArmed = false;
 
   var els = {};
-  ["searchInput","categoryFilter","locationFilter","inventoryList","inventoryEmpty","invCount",
+  ["searchInput","categoryFilter","inventoryList","inventoryEmpty","invCount",
    "shoppingList","shoppingEmpty","shopCountBadge","tabBtnInventory","tabBtnShopping",
    "viewInventory","viewShopping","fabAdd","addShopBtn","syncNote","accessBanner","manageBtn",
    "itemModal","itemModalTitle","fName","nameDupHint","fCategory","fQuantity","fLocation","fUnit","fNotes",
@@ -823,16 +826,12 @@ import {
 
   function renderFilters() {
     var itemCats = items.map(function (i) { return i.category; });
-    var itemLocs = items.map(function (i) { return i.location; });
     var cats = uniqueSorted(categories.map(function (c) { return c.name; }).concat(itemCats));
-    var locs = uniqueSorted(locations.map(function (l) { return l.name; }).concat(itemLocs));
 
-    var curCat = els.categoryFilter.value, curLoc = els.locationFilter.value;
+    var curCat = els.categoryFilter.value;
     els.categoryFilter.innerHTML = '<option value="">All categories</option>' +
       cats.map(function (c) { return '<option value="' + esc(c) + '">' + esc(c) + '</option>'; }).join("");
-    els.locationFilter.innerHTML = '<option value="">All locations</option>' +
-      locs.map(function (l) { return '<option value="' + esc(l) + '">' + esc(l) + '</option>'; }).join("");
-    els.categoryFilter.value = curCat; els.locationFilter.value = curLoc;
+    els.categoryFilter.value = curCat;
   }
 
   function buildManagedSelect(selectEl, list, currentValue, placeholderLabel) {
@@ -871,14 +870,40 @@ import {
   function matchesFilters(i) {
     var q = els.searchInput.value.trim().toLowerCase();
     var cat = els.categoryFilter.value;
-    var loc = els.locationFilter.value;
     if (cat && (i.category || "") !== cat) return false;
-    if (loc && (i.location || "") !== loc) return false;
     if (q) {
       var hay = [i.name, i.category, i.location, i.notes].join(" ").toLowerCase();
       if (hay.indexOf(q) === -1) return false;
     }
     return true;
+  }
+
+  var NO_LOCATION_KEY = "\u0000none";
+
+  function renderItemRow(i) {
+    var qty = typeof i.quantity === "number" ? i.quantity : 0;
+    var tags = "";
+    if (i.category) tags += '<span class="tag">' + esc(i.category) + '</span>';
+    return (
+      '<li class="item-row" data-id="' + i.id + '">' +
+        '<div class="item-main" data-open="' + i.id + '">' +
+          '<div class="item-name">' + esc(i.name || "Untitled item") + '</div>' +
+          '<div class="item-tags">' + tags + '</div>' +
+          (i.notes ? '<div class="item-notes">' + esc(i.notes) + '</div>' : "") +
+        '</div>' +
+        '<div class="qty-stepper">' +
+          '<button data-qty="-1" data-id="' + i.id + '" aria-label="Decrease quantity">–</button>' +
+          '<div class="qty-center">' +
+            '<span class="qty-num' + (qty <= 0 ? " zero" : "") + '">' + qty + '</span>' +
+            (i.unit ? '<span class="qty-unit">' + esc(i.unit) + '</span>' : "") +
+          '</div>' +
+          '<button data-qty="1" data-id="' + i.id + '" aria-label="Increase quantity">+</button>' +
+        '</div>' +
+        '<div class="row-actions">' +
+          '<button class="icon-btn" data-addshop="' + i.id + '" title="Add to shopping list" aria-label="Add to shopping list">🛒</button>' +
+        '</div>' +
+      '</li>'
+    );
   }
 
   function renderInventory() {
@@ -889,37 +914,44 @@ import {
     els.inventoryList.hidden = items.length === 0;
 
     if (items.length !== 0 && filtered.length === 0) {
-      els.inventoryList.innerHTML = '<li style="padding:24px 0; text-align:center; color:var(--text-dim);">No items match your search.</li>';
+      els.inventoryList.innerHTML = '<div style="padding:24px 0; text-align:center; color:var(--text-dim);">No items match your search.</div>';
       return;
     }
+    if (items.length === 0) { els.inventoryList.innerHTML = ""; return; }
 
-    els.inventoryList.innerHTML = filtered.map(function (i) {
-      var qty = typeof i.quantity === "number" ? i.quantity : 0;
-      var tags = "";
-      if (i.category) tags += '<span class="tag">' + esc(i.category) + '</span>';
-      if (i.location) tags += '<span class="tag">' + esc(i.location) + '</span>';
+    var searching = !!(els.searchInput.value.trim() || els.categoryFilter.value);
+
+    var groups = {};
+    filtered.forEach(function (i) {
+      var loc = (i.location || "").trim();
+      var key = loc || NO_LOCATION_KEY;
+      if (!groups[key]) groups[key] = { label: loc || "No location", items: [] };
+      groups[key].items.push(i);
+    });
+    var keys = Object.keys(groups).sort(function (a, b) {
+      if (a === NO_LOCATION_KEY) return 1;
+      if (b === NO_LOCATION_KEY) return -1;
+      return groups[a].label.localeCompare(groups[b].label);
+    });
+
+    els.inventoryList.innerHTML = keys.map(function (key) {
+      var g = groups[key];
+      var isOpen = searching || !!openLocationGroups[key];
       return (
-        '<li class="item-row" data-id="' + i.id + '">' +
-          '<div class="item-main" data-open="' + i.id + '">' +
-            '<div class="item-name">' + esc(i.name || "Untitled item") + '</div>' +
-            '<div class="item-tags">' + tags + '</div>' +
-            (i.notes ? '<div class="item-notes">' + esc(i.notes) + '</div>' : "") +
-          '</div>' +
-          '<div class="qty-stepper">' +
-            '<button data-qty="-1" data-id="' + i.id + '" aria-label="Decrease quantity">–</button>' +
-            '<div class="qty-center">' +
-              '<span class="qty-num' + (qty <= 0 ? " zero" : "") + '">' + qty + '</span>' +
-              (i.unit ? '<span class="qty-unit">' + esc(i.unit) + '</span>' : "") +
-            '</div>' +
-            '<button data-qty="1" data-id="' + i.id + '" aria-label="Increase quantity">+</button>' +
-          '</div>' +
-          '<div class="row-actions">' +
-            '<button class="icon-btn" data-addshop="' + i.id + '" title="Add to shopping list" aria-label="Add to shopping list">🛒</button>' +
-          '</div>' +
-        '</li>'
+        '<details class="manage-section loc-group"' + (isOpen ? " open" : "") + ' data-loc="' + esc(key) + '">' +
+          '<summary>' + esc(g.label) + ' <span class="count-badge">(' + g.items.length + ')</span></summary>' +
+          '<ul class="list">' + g.items.map(renderItemRow).join("") + '</ul>' +
+        '</details>'
       );
     }).join("");
   }
+
+  els.inventoryList.addEventListener("toggle", function (e) {
+    var d = e.target;
+    if (d && d.classList && d.classList.contains("loc-group")) {
+      openLocationGroups[d.getAttribute("data-loc")] = d.open;
+    }
+  }, true);
 
   els.inventoryList.addEventListener("click", function (e) {
     var t = e.target;
@@ -939,7 +971,6 @@ import {
 
   els.searchInput.addEventListener("input", renderInventory);
   els.categoryFilter.addEventListener("change", renderInventory);
-  els.locationFilter.addEventListener("change", renderInventory);
 
   async function changeQuantity(id, delta) {
     if (!firebaseReady || qtyBusy[id]) return;
@@ -1020,7 +1051,11 @@ import {
     if (editingItemId) { els.nameDupHint.hidden = true; return; }
     var name = els.fName.value.trim().toLowerCase();
     if (!name) { els.nameDupHint.hidden = true; return; }
-    var match = items.find(function (x) { return (x.name || "").trim().toLowerCase() === name; });
+    var loc = els.fLocation.value.trim().toLowerCase();
+    var match = items.find(function (x) {
+      return (x.name || "").trim().toLowerCase() === name &&
+        (x.location || "").trim().toLowerCase() === loc;
+    });
     if (match) {
       var where = match.location ? " in " + esc(match.location) : "";
       els.nameDupHint.innerHTML =
@@ -1036,6 +1071,7 @@ import {
     }
   }
   els.fName.addEventListener("input", checkNameDuplicate);
+  els.fLocation.addEventListener("change", checkNameDuplicate);
 
   // Prevent the mouse wheel from silently changing a focused number field
   [els.fQuantity, els.sQuantity].forEach(function (el) {
@@ -1114,13 +1150,14 @@ import {
       }
       els.itemModal.close();
       if (wasNew) {
+        var locKey = (payload.location || "").trim() || NO_LOCATION_KEY;
+        openLocationGroups[locKey] = true;
         var wouldBeFiltered = (els.categoryFilter.value && els.categoryFilter.value !== payload.category) ||
-          (els.locationFilter.value && els.locationFilter.value !== payload.location) ||
           (els.searchInput.value.trim() && payload.name.toLowerCase().indexOf(els.searchInput.value.trim().toLowerCase()) === -1);
         if (wouldBeFiltered) {
-          els.categoryFilter.value = ""; els.locationFilter.value = ""; els.searchInput.value = "";
-          renderInventory();
+          els.categoryFilter.value = ""; els.searchInput.value = "";
         }
+        renderInventory();
       }
       showToast(editingItemId ? "Item updated" : "Item added");
     } catch (e) {
