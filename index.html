@@ -495,6 +495,14 @@
       <input type="number" id="sQuantity" min="1" step="1" value="1">
     </div>
     <div class="field">
+      <label for="sLocation">Location</label>
+      <select id="sLocation"></select>
+      <div class="inline-add" id="sLocationAdd" hidden>
+        <input type="text" id="sLocationNewInput" placeholder="New location name">
+        <button class="btn" type="button" id="sLocationAddConfirm">Add</button>
+      </div>
+    </div>
+    <div class="field">
       <label for="sNotes">Notes</label>
       <textarea id="sNotes" placeholder="Optional — size, brand, where from"></textarea>
     </div>
@@ -594,6 +602,7 @@ import {
   var editingItemId = null;
   var qtyBusy = {};
   var openLocationGroups = {};
+  var openShopGroups = {};
   var seededCategoriesOnce = false;
   var seededLocationsOnce = false;
   var seededUnitsOnce = false;
@@ -607,7 +616,7 @@ import {
    "fCategoryAdd","fCategoryNewInput","fCategoryAddConfirm","fLocationAdd","fLocationNewInput","fLocationAddConfirm",
    "fUnitAdd","fUnitNewInput","fUnitAddConfirm",
    "deleteItemBtn","cancelItemBtn","saveItemBtn",
-   "shopModal","sName","sQuantity","sNotes","cancelShopBtn","saveShopBtn",
+   "shopModal","sName","sQuantity","sLocation","sLocationAdd","sLocationNewInput","sLocationAddConfirm","sNotes","cancelShopBtn","saveShopBtn",
    "manageModal","manageCategoriesList","manageLocationsList","manageUnitsList","newCategoryInput","addCategoryBtn",
    "newLocationInput","addLocationBtn","newUnitInput","addUnitBtn","closeManageBtn",
    "catCountBadge","locCountBadge","unitCountBadge","accentSwatches","customAccentInput",
@@ -946,14 +955,16 @@ import {
     }).join("");
   }
 
-  els.inventoryList.addEventListener("toggle", function (e) {
-    var d = e.target;
-    if (d && d.classList && d.classList.contains("loc-group")) {
-      openLocationGroups[d.getAttribute("data-loc")] = d.open;
-    }
-  }, true);
-
   els.inventoryList.addEventListener("click", function (e) {
+    var summary = e.target.closest("summary");
+    var groupEl = summary ? summary.closest(".loc-group") : null;
+    if (groupEl) {
+      e.preventDefault();
+      var key = groupEl.getAttribute("data-loc");
+      openLocationGroups[key] = !openLocationGroups[key];
+      renderInventory();
+      return;
+    }
     var t = e.target;
     var qtyBtn = t.closest("[data-qty]");
     var openTarget = t.closest("[data-open]");
@@ -1006,9 +1017,12 @@ import {
       name: item.name || "",
       quantity: 1,
       notes: "",
+      location: item.location || "",
       linkedItemId: item.id,
       createdAt: new Date().toISOString()
     }).then(function () {
+      var locKey = (item.location || "").trim() || NO_LOCATION_KEY;
+      openShopGroups[locKey] = true;
       showToast('Added "' + item.name + '" to shopping list');
     }).catch(function () { showToast("Couldn't add to list"); }).finally(finish);
   }
@@ -1037,10 +1051,11 @@ import {
     els.fName.focus();
   }
 
-  function openItemModalPrefilled(name, quantity) {
+  function openItemModalPrefilled(name, quantity, location) {
     openItemModal(null);
     els.fName.value = name || "";
     els.fQuantity.value = quantity || 1;
+    if (location) renderLocationSelect(location);
     checkNameDuplicate();
   }
 
@@ -1188,28 +1203,64 @@ import {
   });
 
   // ---------- shopping list ----------
+  function shopGroupOpen(key) { return openShopGroups[key] !== false; }
+
+  function renderShoppingRow(s) {
+    return (
+      '<li class="shop-row" data-id="' + s.id + '">' +
+        '<div class="shop-main">' +
+          '<div class="shop-name">' + esc(s.name || "Untitled") + '</div>' +
+          '<div class="shop-qty">Qty needed: ' + (s.quantity != null ? s.quantity : 1) + '</div>' +
+          (s.notes ? '<div class="shop-notes">' + esc(s.notes) + '</div>' : "") +
+        '</div>' +
+        '<div class="shop-actions">' +
+          '<button class="btn primary" data-gotit="' + s.id + '">Got it</button>' +
+          '<button class="icon-btn" data-remove="' + s.id + '" aria-label="Remove from list">✕</button>' +
+        '</div>' +
+      '</li>'
+    );
+  }
+
   function renderShopping() {
     els.shopCountBadge.textContent = shopping.length ? "(" + shopping.length + ")" : "";
     els.shoppingEmpty.hidden = shopping.length !== 0;
     els.shoppingList.hidden = shopping.length === 0;
-    els.shoppingList.innerHTML = shopping.map(function (s) {
+    if (shopping.length === 0) { els.shoppingList.innerHTML = ""; return; }
+
+    var groups = {};
+    shopping.forEach(function (s) {
+      var loc = (s.location || "").trim();
+      var key = loc || NO_LOCATION_KEY;
+      if (!groups[key]) groups[key] = { label: loc || "No location", items: [] };
+      groups[key].items.push(s);
+    });
+    var keys = Object.keys(groups).sort(function (a, b) {
+      if (a === NO_LOCATION_KEY) return 1;
+      if (b === NO_LOCATION_KEY) return -1;
+      return groups[a].label.localeCompare(groups[b].label);
+    });
+
+    els.shoppingList.innerHTML = keys.map(function (key) {
+      var g = groups[key];
       return (
-        '<li class="shop-row" data-id="' + s.id + '">' +
-          '<div class="shop-main">' +
-            '<div class="shop-name">' + esc(s.name || "Untitled") + '</div>' +
-            '<div class="shop-qty">Qty needed: ' + (s.quantity != null ? s.quantity : 1) + '</div>' +
-            (s.notes ? '<div class="shop-notes">' + esc(s.notes) + '</div>' : "") +
-          '</div>' +
-          '<div class="shop-actions">' +
-            '<button class="btn primary" data-gotit="' + s.id + '">Got it</button>' +
-            '<button class="icon-btn" data-remove="' + s.id + '" aria-label="Remove from list">✕</button>' +
-          '</div>' +
-        '</li>'
+        '<details class="manage-section loc-group"' + (shopGroupOpen(key) ? " open" : "") + ' data-loc="' + esc(key) + '">' +
+          '<summary>' + esc(g.label) + ' <span class="count-badge">(' + g.items.length + ')</span></summary>' +
+          '<ul class="list">' + g.items.map(renderShoppingRow).join("") + '</ul>' +
+        '</details>'
       );
     }).join("");
   }
 
   els.shoppingList.addEventListener("click", async function (e) {
+    var summary = e.target.closest("summary");
+    var groupEl = summary ? summary.closest(".loc-group") : null;
+    if (groupEl) {
+      e.preventDefault();
+      var key = groupEl.getAttribute("data-loc");
+      openShopGroups[key] = !shopGroupOpen(key);
+      renderShopping();
+      return;
+    }
     var gotIt = e.target.closest("[data-gotit]");
     var remove = e.target.closest("[data-remove]");
     if (gotIt) {
@@ -1226,7 +1277,7 @@ import {
           showToast("Added to " + linked.name);
         } else {
           await deleteDoc(doc(fsdb, "shopping", id));
-          openItemModalPrefilled(s.name, s.quantity);
+          openItemModalPrefilled(s.name, s.quantity, s.location);
           showToast("Now add it to inventory");
         }
       } catch (err) {
@@ -1244,10 +1295,14 @@ import {
     els.sName.value = "";
     els.sQuantity.value = 1;
     els.sNotes.value = "";
+    buildManagedSelect(els.sLocation, locations, "", "No location");
+    els.sLocationAdd.hidden = true;
     els.shopModal.showModal();
     els.sName.focus();
   });
   els.cancelShopBtn.addEventListener("click", function () { els.shopModal.close(); });
+  wireInlineAdd(els.sLocation, els.sLocationAdd, els.sLocationNewInput, els.sLocationAddConfirm, "locations",
+    function (name) { buildManagedSelect(els.sLocation, locations, name, "No location"); });
 
   els.saveShopBtn.addEventListener("click", async function () {
     if (!firebaseReady) { showToast("Not connected"); return; }
@@ -1255,9 +1310,14 @@ import {
     if (!name) { showToast("Give it a name"); els.sName.focus(); return; }
     var qty = parseInt(els.sQuantity.value, 10);
     if (isNaN(qty) || qty < 1) qty = 1;
+    if (els.sLocation.value === "__new__") { showToast("Finish adding the new location first"); return; }
+    var chosenLoc = els.sLocation.value.trim();
     var matched = items.find(function (x) { return (x.name || "").toLowerCase() === name.toLowerCase(); });
+    var finalLoc = matched ? (matched.location || "") : chosenLoc;
     var existingShop = shopping.find(function (s) {
-      return matched ? s.linkedItemId === matched.id : (s.name || "").toLowerCase() === name.toLowerCase();
+      if (matched) return s.linkedItemId === matched.id;
+      return (s.name || "").toLowerCase() === name.toLowerCase() &&
+        (s.location || "").trim().toLowerCase() === chosenLoc.toLowerCase();
     });
     els.saveShopBtn.disabled = true;
     try {
@@ -1272,9 +1332,12 @@ import {
           name: name,
           quantity: qty,
           notes: els.sNotes.value.trim(),
+          location: finalLoc,
           linkedItemId: matched ? matched.id : null,
           createdAt: new Date().toISOString()
         });
+        var locKey = finalLoc.trim() || NO_LOCATION_KEY;
+        openShopGroups[locKey] = true;
         showToast("Added to shopping list");
       }
       els.shopModal.close();
