@@ -220,8 +220,18 @@
     font-size: 16px; line-height: 1;
     display: flex; align-items: center; justify-content: center;
   }
-  .qty-num { min-width: 22px; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .qty-num.zero { color: var(--warn-text); }
+  .qty-num-btn {
+    min-width: 26px; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums;
+    background: none; border: none; color: var(--text); font: inherit; padding: 2px 5px;
+    border-radius: 5px; cursor: pointer;
+  }
+  .qty-num-btn.zero { color: var(--warn-text); }
+  .qty-num-btn:hover, .qty-num-btn:focus-visible { background: var(--accent-soft); }
+  .qty-edit-input {
+    width: 52px; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums;
+    border: 1px solid var(--accent); border-radius: 5px; padding: 2px 4px;
+    background: var(--bg-raised); color: var(--text); font-size: inherit;
+  }
   .qty-center { display: flex; flex-direction: column; align-items: center; min-width: 26px; }
   .qty-unit { font-size: 10px; color: var(--text-dim); line-height: 1.2; margin-top: 1px; text-transform: lowercase; }
   .row-actions { display: flex; gap: 4px; flex: none; }
@@ -341,6 +351,12 @@
   .manage-section[open] summary { padding-bottom: 8px; }
   .manage-section > *:not(summary) { margin-bottom: 12px; }
   .count-badge { font-weight: 400; color: var(--text-dim); font-size: 12px; margin-right: auto; margin-left: 6px; }
+  .managed-row-actions { display: flex; gap: 4px; flex: none; }
+  .managed-editing { gap: 8px; }
+  .managed-edit-input {
+    flex: 1; min-width: 0; border: 1px solid var(--accent); border-radius: 5px;
+    padding: 6px 8px; background: var(--bg); color: var(--text); font-size: 14px;
+  }
   ul.manage-list { list-style: none; margin: 0 0 10px; padding: 0; border-top: 1px solid var(--border);
     max-height: 220px; overflow-y: auto; }
   ul.manage-list li {
@@ -495,14 +511,6 @@
       <input type="number" id="sQuantity" min="1" step="1" value="1">
     </div>
     <div class="field">
-      <label for="sLocation">Location</label>
-      <select id="sLocation"></select>
-      <div class="inline-add" id="sLocationAdd" hidden>
-        <input type="text" id="sLocationNewInput" placeholder="New location name">
-        <button class="btn" type="button" id="sLocationAddConfirm">Add</button>
-      </div>
-    </div>
-    <div class="field">
       <label for="sNotes">Notes</label>
       <textarea id="sNotes" placeholder="Optional — size, brand, where from"></textarea>
     </div>
@@ -592,7 +600,7 @@ import {
 
   // ---------- state ----------
   var items = [];          // {id, name, quantity, category, location, notes}
-  var shopping = [];        // {id, name, quantity, notes, linkedItemId, createdAt}
+  var shopping = [];        // {id, name, quantity, notes, createdAt}
   var categories = [];      // {id, name}
   var locations = [];       // {id, name}
   var units = [];           // {id, name}
@@ -602,7 +610,6 @@ import {
   var editingItemId = null;
   var qtyBusy = {};
   var openLocationGroups = {};
-  var openShopGroups = {};
   var seededCategoriesOnce = false;
   var seededLocationsOnce = false;
   var seededUnitsOnce = false;
@@ -616,7 +623,7 @@ import {
    "fCategoryAdd","fCategoryNewInput","fCategoryAddConfirm","fLocationAdd","fLocationNewInput","fLocationAddConfirm",
    "fUnitAdd","fUnitNewInput","fUnitAddConfirm",
    "deleteItemBtn","cancelItemBtn","saveItemBtn",
-   "shopModal","sName","sQuantity","sLocation","sLocationAdd","sLocationNewInput","sLocationAddConfirm","sNotes","cancelShopBtn","saveShopBtn",
+   "shopModal","sName","sQuantity","sNotes","cancelShopBtn","saveShopBtn",
    "manageModal","manageCategoriesList","manageLocationsList","manageUnitsList","newCategoryInput","addCategoryBtn",
    "newLocationInput","addLocationBtn","newUnitInput","addUnitBtn","closeManageBtn",
    "catCountBadge","locCountBadge","unitCountBadge","accentSwatches","customAccentInput",
@@ -887,7 +894,7 @@ import {
     return true;
   }
 
-  var NO_LOCATION_KEY = "\u0000none";
+  var NO_LOCATION_KEY = "__none__";
 
   function renderItemRow(i) {
     var qty = typeof i.quantity === "number" ? i.quantity : 0;
@@ -903,13 +910,10 @@ import {
         '<div class="qty-stepper">' +
           '<button data-qty="-1" data-id="' + i.id + '" aria-label="Decrease quantity">–</button>' +
           '<div class="qty-center">' +
-            '<span class="qty-num' + (qty <= 0 ? " zero" : "") + '">' + qty + '</span>' +
+            '<button type="button" class="qty-num-btn' + (qty <= 0 ? " zero" : "") + '" data-qty-edit="' + i.id + '">' + qty + '</button>' +
             (i.unit ? '<span class="qty-unit">' + esc(i.unit) + '</span>' : "") +
           '</div>' +
           '<button data-qty="1" data-id="' + i.id + '" aria-label="Increase quantity">+</button>' +
-        '</div>' +
-        '<div class="row-actions">' +
-          '<button class="icon-btn" data-addshop="' + i.id + '" title="Add to shopping list" aria-label="Add to shopping list">🛒</button>' +
         '</div>' +
       '</li>'
     );
@@ -967,18 +971,47 @@ import {
     }
     var t = e.target;
     var qtyBtn = t.closest("[data-qty]");
+    var qtyEditBtn = t.closest("[data-qty-edit]");
     var openTarget = t.closest("[data-open]");
-    var shopBtn = t.closest("[data-addshop]");
     if (qtyBtn) {
       changeQuantity(qtyBtn.getAttribute("data-id"), parseInt(qtyBtn.getAttribute("data-qty"), 10));
-    } else if (shopBtn) {
-      var iid = shopBtn.getAttribute("data-addshop");
-      var itm = items.find(function (x) { return x.id === iid; });
-      if (itm) quickAddToShopping(itm);
+    } else if (qtyEditBtn) {
+      var qid = qtyEditBtn.getAttribute("data-qty-edit");
+      var itemForQty = items.find(function (x) { return x.id === qid; });
+      if (!itemForQty) return;
+      var center = qtyEditBtn.closest(".qty-center");
+      var curQty = typeof itemForQty.quantity === "number" ? itemForQty.quantity : 0;
+      center.innerHTML = '<input type="number" inputmode="numeric" class="qty-edit-input" min="0" step="1" data-qty-input="' + qid + '" value="' + curQty + '">';
+      var qInp = center.querySelector("input");
+      qInp.focus();
+      qInp.select();
     } else if (openTarget) {
       openItemModal(openTarget.getAttribute("data-open"));
     }
   });
+
+  els.inventoryList.addEventListener("focusout", function (e) {
+    var inp = e.target.closest("[data-qty-input]");
+    if (inp) commitQtyEdit(inp);
+  });
+  els.inventoryList.addEventListener("keydown", function (e) {
+    var inp = e.target.closest("[data-qty-input]");
+    if (!inp) return;
+    if (e.key === "Enter") { e.preventDefault(); inp.blur(); }
+    else if (e.key === "Escape") { e.preventDefault(); renderInventory(); }
+  });
+  async function commitQtyEdit(inp) {
+    var id = inp.getAttribute("data-qty-input");
+    var val = parseInt(inp.value, 10);
+    if (isNaN(val) || val < 0) val = 0;
+    if (!firebaseReady) { renderInventory(); return; }
+    try {
+      await updateDoc(doc(fsdb, "items", id), { quantity: val, updatedAt: new Date().toISOString() });
+    } catch (e) {
+      showToast("Couldn't update — try again");
+    }
+    renderInventory();
+  }
 
   els.searchInput.addEventListener("input", renderInventory);
   els.categoryFilter.addEventListener("change", renderInventory);
@@ -997,34 +1030,6 @@ import {
     } finally {
       qtyBusy[id] = false;
     }
-  }
-
-  var shopAddBusy = {};
-  function quickAddToShopping(item) {
-    if (!firebaseReady || shopAddBusy[item.id]) return;
-    shopAddBusy[item.id] = true;
-    var finish = function () { shopAddBusy[item.id] = false; };
-    var existing = shopping.find(function (s) { return s.linkedItemId === item.id; });
-    if (existing) {
-      var newQty = (existing.quantity || 1) + 1;
-      updateDoc(doc(fsdb, "shopping", existing.id), { quantity: newQty })
-        .then(function () { showToast('"' + item.name + '" — now ' + newQty + ' on the list'); })
-        .catch(function () { showToast("Couldn't update list"); })
-        .finally(finish);
-      return;
-    }
-    addDoc(collection(fsdb, "shopping"), {
-      name: item.name || "",
-      quantity: 1,
-      notes: "",
-      location: item.location || "",
-      linkedItemId: item.id,
-      createdAt: new Date().toISOString()
-    }).then(function () {
-      var locKey = (item.location || "").trim() || NO_LOCATION_KEY;
-      openShopGroups[locKey] = true;
-      showToast('Added "' + item.name + '" to shopping list');
-    }).catch(function () { showToast("Couldn't add to list"); }).finally(finish);
   }
 
   // ---------- item modal ----------
@@ -1051,11 +1056,10 @@ import {
     els.fName.focus();
   }
 
-  function openItemModalPrefilled(name, quantity, location) {
+  function openItemModalPrefilled(name, quantity) {
     openItemModal(null);
     els.fName.value = name || "";
     els.fQuantity.value = quantity || 1;
-    if (location) renderLocationSelect(location);
     checkNameDuplicate();
   }
 
@@ -1203,8 +1207,6 @@ import {
   });
 
   // ---------- shopping list ----------
-  function shopGroupOpen(key) { return openShopGroups[key] !== false; }
-
   function renderShoppingRow(s) {
     return (
       '<li class="shop-row" data-id="' + s.id + '">' +
@@ -1225,66 +1227,18 @@ import {
     els.shopCountBadge.textContent = shopping.length ? "(" + shopping.length + ")" : "";
     els.shoppingEmpty.hidden = shopping.length !== 0;
     els.shoppingList.hidden = shopping.length === 0;
-    if (shopping.length === 0) { els.shoppingList.innerHTML = ""; return; }
-
-    var groups = {};
-    shopping.forEach(function (s) {
-      var loc = (s.location || "").trim();
-      var key = loc || NO_LOCATION_KEY;
-      if (!groups[key]) groups[key] = { label: loc || "No location", items: [] };
-      groups[key].items.push(s);
-    });
-    var keys = Object.keys(groups).sort(function (a, b) {
-      if (a === NO_LOCATION_KEY) return 1;
-      if (b === NO_LOCATION_KEY) return -1;
-      return groups[a].label.localeCompare(groups[b].label);
-    });
-
-    els.shoppingList.innerHTML = keys.map(function (key) {
-      var g = groups[key];
-      return (
-        '<details class="manage-section loc-group"' + (shopGroupOpen(key) ? " open" : "") + ' data-loc="' + esc(key) + '">' +
-          '<summary>' + esc(g.label) + ' <span class="count-badge">(' + g.items.length + ')</span></summary>' +
-          '<ul class="list">' + g.items.map(renderShoppingRow).join("") + '</ul>' +
-        '</details>'
-      );
-    }).join("");
+    els.shoppingList.innerHTML = shopping.map(renderShoppingRow).join("");
   }
 
-  els.shoppingList.addEventListener("click", async function (e) {
-    var summary = e.target.closest("summary");
-    var groupEl = summary ? summary.closest(".loc-group") : null;
-    if (groupEl) {
-      e.preventDefault();
-      var key = groupEl.getAttribute("data-loc");
-      openShopGroups[key] = !shopGroupOpen(key);
-      renderShopping();
-      return;
-    }
+  els.shoppingList.addEventListener("click", function (e) {
     var gotIt = e.target.closest("[data-gotit]");
     var remove = e.target.closest("[data-remove]");
     if (gotIt) {
       var id = gotIt.getAttribute("data-gotit");
-      var s = shopping.find(function (x) { return x.id === id; });
-      if (!s) return;
       gotIt.disabled = true;
-      try {
-        var linked = s.linkedItemId ? items.find(function (x) { return x.id === s.linkedItemId; }) : null;
-        if (linked) {
-          var newQty = (typeof linked.quantity === "number" ? linked.quantity : 0) + (s.quantity || 1);
-          await updateDoc(doc(fsdb, "items", linked.id), { quantity: newQty, updatedAt: new Date().toISOString() });
-          await deleteDoc(doc(fsdb, "shopping", id));
-          showToast("Added to " + linked.name);
-        } else {
-          await deleteDoc(doc(fsdb, "shopping", id));
-          openItemModalPrefilled(s.name, s.quantity, s.location);
-          showToast("Now add it to inventory");
-        }
-      } catch (err) {
-        showToast("Couldn't update — try again");
-      } finally {
-        gotIt.disabled = false;
-      }
+      deleteDoc(doc(fsdb, "shopping", id))
+        .then(function () { showToast("Marked as bought"); })
+        .catch(function () { showToast("Couldn't update — try again"); gotIt.disabled = false; });
     } else if (remove) {
       var rid = remove.getAttribute("data-remove");
       deleteDoc(doc(fsdb, "shopping", rid)).catch(function () { showToast("Couldn't remove"); });
@@ -1295,14 +1249,10 @@ import {
     els.sName.value = "";
     els.sQuantity.value = 1;
     els.sNotes.value = "";
-    buildManagedSelect(els.sLocation, locations, "", "No location");
-    els.sLocationAdd.hidden = true;
     els.shopModal.showModal();
     els.sName.focus();
   });
   els.cancelShopBtn.addEventListener("click", function () { els.shopModal.close(); });
-  wireInlineAdd(els.sLocation, els.sLocationAdd, els.sLocationNewInput, els.sLocationAddConfirm, "locations",
-    function (name) { buildManagedSelect(els.sLocation, locations, name, "No location"); });
 
   els.saveShopBtn.addEventListener("click", async function () {
     if (!firebaseReady) { showToast("Not connected"); return; }
@@ -1310,15 +1260,7 @@ import {
     if (!name) { showToast("Give it a name"); els.sName.focus(); return; }
     var qty = parseInt(els.sQuantity.value, 10);
     if (isNaN(qty) || qty < 1) qty = 1;
-    if (els.sLocation.value === "__new__") { showToast("Finish adding the new location first"); return; }
-    var chosenLoc = els.sLocation.value.trim();
-    var matched = items.find(function (x) { return (x.name || "").toLowerCase() === name.toLowerCase(); });
-    var finalLoc = matched ? (matched.location || "") : chosenLoc;
-    var existingShop = shopping.find(function (s) {
-      if (matched) return s.linkedItemId === matched.id;
-      return (s.name || "").toLowerCase() === name.toLowerCase() &&
-        (s.location || "").trim().toLowerCase() === chosenLoc.toLowerCase();
-    });
+    var existingShop = shopping.find(function (s) { return (s.name || "").toLowerCase() === name.toLowerCase(); });
     els.saveShopBtn.disabled = true;
     try {
       if (existingShop) {
@@ -1332,12 +1274,8 @@ import {
           name: name,
           quantity: qty,
           notes: els.sNotes.value.trim(),
-          location: finalLoc,
-          linkedItemId: matched ? matched.id : null,
           createdAt: new Date().toISOString()
         });
-        var locKey = finalLoc.trim() || NO_LOCATION_KEY;
-        openShopGroups[locKey] = true;
         showToast("Added to shopping list");
       }
       els.shopModal.close();
@@ -1347,30 +1285,47 @@ import {
       els.saveShopBtn.disabled = false;
     }
   });
-
   // ---------- manage categories, locations, units ----------
+  var editingManaged = null; // { collection, id }
+
+  function managedListForCollection(name) {
+    return name === "categories" ? categories : (name === "locations" ? locations : units);
+  }
+  function fieldForCollection(name) {
+    return name === "categories" ? "category" : (name === "locations" ? "location" : "unit");
+  }
+
+  function renderManagedList(listEl, collectionName, list) {
+    listEl.innerHTML = list.length
+      ? list.map(function (it) {
+          if (editingManaged && editingManaged.collection === collectionName && editingManaged.id === it.id) {
+            return '<li class="managed-editing">' +
+              '<input type="text" class="managed-edit-input" value="' + esc(it.name) + '" data-edit-input="' + it.id + '">' +
+              '<span class="managed-row-actions">' +
+                '<button class="icon-btn" data-save-edit="' + it.id + '" data-collection="' + collectionName + '" aria-label="Save">✓</button>' +
+                '<button class="icon-btn" data-cancel-edit aria-label="Cancel">✕</button>' +
+              '</span>' +
+            '</li>';
+          }
+          return '<li><span>' + esc(it.name) + '</span><span class="managed-row-actions">' +
+            '<button class="icon-btn" data-edit="' + it.id + '" data-collection="' + collectionName + '" aria-label="Rename">✏️</button>' +
+            '<button class="icon-btn" data-del="' + it.id + '" data-collection="' + collectionName + '" aria-label="Delete">✕</button>' +
+          '</span></li>';
+        }).join("")
+      : '<li class="empty-note">Nothing here yet</li>';
+  }
+
   function renderManageLists() {
     els.catCountBadge.textContent = categories.length ? "(" + categories.length + ")" : "";
     els.locCountBadge.textContent = locations.length ? "(" + locations.length + ")" : "";
     els.unitCountBadge.textContent = units.length ? "(" + units.length + ")" : "";
-    els.manageCategoriesList.innerHTML = categories.length
-      ? categories.map(function (c) {
-          return '<li><span>' + esc(c.name) + '</span><button class="icon-btn" data-del-cat="' + c.id + '" aria-label="Delete category">✕</button></li>';
-        }).join("")
-      : '<li class="empty-note">No categories yet</li>';
-    els.manageLocationsList.innerHTML = locations.length
-      ? locations.map(function (l) {
-          return '<li><span>' + esc(l.name) + '</span><button class="icon-btn" data-del-loc="' + l.id + '" aria-label="Delete location">✕</button></li>';
-        }).join("")
-      : '<li class="empty-note">No locations yet</li>';
-    els.manageUnitsList.innerHTML = units.length
-      ? units.map(function (u) {
-          return '<li><span>' + esc(u.name) + '</span><button class="icon-btn" data-del-unit="' + u.id + '" aria-label="Delete unit">✕</button></li>';
-        }).join("")
-      : '<li class="empty-note">No units yet</li>';
+    renderManagedList(els.manageCategoriesList, "categories", categories);
+    renderManagedList(els.manageLocationsList, "locations", locations);
+    renderManagedList(els.manageUnitsList, "units", units);
   }
 
   els.manageBtn.addEventListener("click", function () {
+    editingManaged = null;
     renderManageLists();
     els.manageModal.showModal();
   });
@@ -1382,20 +1337,81 @@ import {
   });
   els.customAccentInput.addEventListener("input", function () { applyAccent(this.value); });
 
-  els.manageCategoriesList.addEventListener("click", function (e) {
-    var btn = e.target.closest("[data-del-cat]");
-    if (!btn || !firebaseReady) return;
-    deleteDoc(doc(fsdb, "categories", btn.getAttribute("data-del-cat"))).catch(function () { showToast("Couldn't delete"); });
+  // Renaming a category/location/unit also updates every item (and, for a
+  // location, every shopping-list entry too) that currently uses the old name.
+  async function renameManaged(collectionName, id, oldName, newName) {
+    await updateDoc(doc(fsdb, collectionName, id), { name: newName });
+    var field = fieldForCollection(collectionName);
+    var toUpdate = items.filter(function (i) { return (i[field] || "") === oldName; });
+    await Promise.all(toUpdate.map(function (i) {
+      var patch = {};
+      patch[field] = newName;
+      return updateDoc(doc(fsdb, "items", i.id), patch);
+    }));
+  }
+
+  els.manageModal.addEventListener("click", async function (e) {
+    var editBtn = e.target.closest("[data-edit]");
+    var saveBtn = e.target.closest("[data-save-edit]");
+    var cancelBtn = e.target.closest("[data-cancel-edit]");
+    var delBtn = e.target.closest("[data-del]");
+
+    if (editBtn) {
+      editingManaged = { collection: editBtn.getAttribute("data-collection"), id: editBtn.getAttribute("data-edit") };
+      renderManageLists();
+      var input = els.manageModal.querySelector('[data-edit-input="' + editingManaged.id + '"]');
+      if (input) { input.focus(); input.select(); }
+      return;
+    }
+    if (cancelBtn) {
+      editingManaged = null;
+      renderManageLists();
+      return;
+    }
+    if (saveBtn) {
+      if (!firebaseReady) return;
+      var collectionName = saveBtn.getAttribute("data-collection");
+      var id = saveBtn.getAttribute("data-save-edit");
+      var input2 = els.manageModal.querySelector('[data-edit-input="' + id + '"]');
+      var newName = input2 ? input2.value.trim() : "";
+      if (!newName) { showToast("Name can't be empty"); return; }
+      var list = managedListForCollection(collectionName);
+      var current = list.find(function (x) { return x.id === id; });
+      if (!current || newName === current.name) { editingManaged = null; renderManageLists(); return; }
+      var dupExists = list.some(function (x) { return x.id !== id && x.name.toLowerCase() === newName.toLowerCase(); });
+      if (dupExists) { showToast("Already in the list"); return; }
+      saveBtn.disabled = true;
+      try {
+        await renameManaged(collectionName, id, current.name, newName);
+        showToast("Renamed — items updated");
+      } catch (err) {
+        showToast("Couldn't rename — try again");
+      } finally {
+        editingManaged = null;
+        renderManageLists();
+      }
+      return;
+    }
+    if (delBtn) {
+      if (!firebaseReady) return;
+      var collectionName2 = delBtn.getAttribute("data-collection");
+      var id2 = delBtn.getAttribute("data-del");
+      deleteDoc(doc(fsdb, collectionName2, id2)).catch(function () { showToast("Couldn't delete"); });
+    }
   });
-  els.manageLocationsList.addEventListener("click", function (e) {
-    var btn = e.target.closest("[data-del-loc]");
-    if (!btn || !firebaseReady) return;
-    deleteDoc(doc(fsdb, "locations", btn.getAttribute("data-del-loc"))).catch(function () { showToast("Couldn't delete"); });
-  });
-  els.manageUnitsList.addEventListener("click", function (e) {
-    var btn = e.target.closest("[data-del-unit]");
-    if (!btn || !firebaseReady) return;
-    deleteDoc(doc(fsdb, "units", btn.getAttribute("data-del-unit"))).catch(function () { showToast("Couldn't delete"); });
+
+  els.manageModal.addEventListener("keydown", function (e) {
+    if (!e.target.matches || !e.target.matches("[data-edit-input]")) return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      var id = e.target.getAttribute("data-edit-input");
+      var saveBtn = els.manageModal.querySelector('[data-save-edit="' + id + '"]');
+      if (saveBtn) saveBtn.click();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      editingManaged = null;
+      renderManageLists();
+    }
   });
 
   function addManaged(collectionName, input, btn) {
